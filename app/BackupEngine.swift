@@ -197,7 +197,7 @@ final class BackupEngine {
     }
 
     private static func parentDirectory(of path: String) -> String {
-        path.split(separator: "/").dropLast().joined(separator: "/")
+        (path as NSString).deletingLastPathComponent
     }
 
     /// `originalFilename` is not filesystem-safe: "/" would invent a path level and ":" is illegal on SMB.

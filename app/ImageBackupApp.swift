@@ -31,7 +31,7 @@ struct ContentView: View {
     private var isRunning: Bool { engine.phase == .running }
 
     private var recentActivity: [String] {
-        Array(engine.activity.suffix(120).reversed())
+        Array(engine.activity.reversed())
     }
 
     var body: some View {
