@@ -1,134 +1,65 @@
 import SwiftUI
-import UIKit
 
 @main
 struct ImageBackupApp: App {
     var body: some Scene {
-        WindowGroup { ContentView() }
+        WindowGroup { RootView() }
     }
 }
 
-struct ContentView: View {
-    @State private var engine = BackupEngine()
+/// Two states, decided once at launch: configured, or not yet.
+///
+/// There is no "has onboarded" flag anywhere — an empty server address *is* the condition, so the
+/// two cannot disagree. The decision is taken once and held in memory, because deriving it live
+/// would dismiss the welcome screen halfway through typing the address.
+struct RootView: View {
+    // Reads only the key it needs: going through `BackupConfig.configured()` would pull the Keychain
+    // and three more defaults on every construction of this view.
+    @State private var needsSetup = (UserDefaults.standard.string(forKey: "serverURL") ?? "").isEmpty
 
-    @AppStorage("serverURL") private var serverURL = "http://192.168.1.10:5005/PhotoBackup"
-    @AppStorage("username") private var username = ""
-    @AppStorage("deviceName") private var deviceName = UIDevice.current.name
-    // Deliberately @State, not @AppStorage: a persisted "To" would be the date of first launch
-    // on every later run, silently skipping everything newer. The range is a per-run choice.
-    @State private var rangeStart = Date.now.addingTimeInterval(-30 * 86_400)
-    @State private var rangeEnd = Date.now
-
-    @State private var password = Keychain.load("webdavPassword")
-
-    private var config: BackupConfig {
-        BackupConfig(serverURL: serverURL,
-                     username: username,
-                     password: password,
-                     deviceName: deviceName)
+    var body: some View {
+        if needsSetup {
+            OnboardingView { needsSetup = false }
+        } else {
+            HomeView()
+        }
     }
+}
 
-    private var isRunning: Bool { engine.phase == .running }
+/// First run: what this app does, the four fields, and the one prompt that will appear.
+///
+/// The explanation is not decoration — research §8.1: a connection attempted while the local-network
+/// privilege is still undetermined is denied silently, so the first one has to happen here, in the
+/// foreground, with the user expecting it.
+struct OnboardingView: View {
+    var onFinish: () -> Void
 
-    private var recentActivity: [String] {
-        Array(engine.activity.reversed())
-    }
+    @AppStorage("serverURL") private var serverURL = ""
+    @State private var password = ""
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("WebDAV server") {
-                    TextField("Base URL", text: $serverURL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                    TextField("Username", text: $username)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    SecureField("Password", text: $password)
-                        .onChange(of: password) { Keychain.save(password, for: "webdavPassword") }
-                    TextField("Device folder", text: $deviceName)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
+                Section {
+                    Text("""
+                        ImageBackup copies your photo library to your own NAS over WebDAV. The photos \
+                        go to the address you enter here and nowhere else.
+                        """)
                 }
 
-                Section("Sync range") {
-                    DatePicker("From", selection: $rangeStart, displayedComponents: .date)
-                    DatePicker("To", selection: $rangeEnd, displayedComponents: .date)
-                    HStack {
-                        Button("Last month") { setRange(days: 30) }
-                        Spacer()
-                        Button("Last year") { setRange(days: 365) }
-                        Spacer()
-                        Button("Everything") { setRange(days: nil) }
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(isRunning)
-                }
+                WebDAVConfigForm(password: $password)
 
                 Section {
-                    if isRunning {
-                        Button("Cancel", role: .destructive) { engine.cancel() }
-                    } else {
-                        Button("Start backup") {
-                            engine.start(config: config,
-                                         from: rangeStart,
-                                         to: rangeEnd.addingTimeInterval(86_400))
-                        }
+                    Button("Continue") {
+                        Keychain.save(password, for: "webdavPassword")
+                        onFinish()
                     }
-                }
-
-                if engine.phase != .idle {
-                    Section("Progress") {
-                        status
-                    }
-                }
-
-                if !engine.activity.isEmpty {
-                    Section("Activity") {
-                        // ponytail: newest first, no paging. Fine for a test run; the engine
-                        // already caps the buffer at 200 lines.
-                        ForEach(recentActivity.indices, id: \.self) { index in
-                            Text(recentActivity[index])
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
+                    .disabled(serverURL.isEmpty)
+                } footer: {
+                    Text("The first upload asks for local-network access; denying it leaves the NAS unreachable.")
                 }
             }
-            .navigationTitle("ImageBackup")
+            .navigationTitle("Welcome")
         }
-    }
-
-    @ViewBuilder
-    private var status: some View {
-        if engine.assetsTotal > 0 {
-            ProgressView(value: Double(engine.assetsDone),
-                         total: Double(engine.assetsTotal))
-            LabeledContent("Assets", value: "\(engine.assetsDone) / \(engine.assetsTotal)")
-        }
-
-        if !engine.currentFile.isEmpty {
-            LabeledContent("Current", value: engine.currentFile)
-                .lineLimit(1)
-                .truncationMode(.middle)
-        }
-
-        if engine.uploadedBytes > 0 {
-            LabeledContent("Uploaded", value: engine.uploadedBytes.formatted(.byteCount(style: .file)))
-        }
-
-        switch engine.phase {
-        case .running: ProgressView()
-        case .done: Text("Finished.").foregroundStyle(.green)
-        case .cancelled: Text("Cancelled.").foregroundStyle(.orange)
-        case .failed(let message): Text(message).foregroundStyle(.red)
-        case .idle: EmptyView()
-        }
-    }
-
-    private func setRange(days: Int?) {
-        rangeEnd = .now
-        rangeStart = days.map { Date.now.addingTimeInterval(-Double($0) * 86_400) } ?? .distantPast
     }
 }

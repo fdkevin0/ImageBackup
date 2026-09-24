@@ -96,7 +96,7 @@ The image carries iOS 27 simulators, so CI can install and launch the app. That 
         run: |
           xcrun simctl boot "iPhone 17"
           xcrun simctl install booted build/Build/Products/Debug-iphonesimulator/ImageBackup.app
-          xcrun simctl launch booted devplaceholder.uesrts8d.ImageBackup
+          xcrun simctl launch booted com.fdkevin.imagebackup
 ```
 
 *Expect to adjust this one: the product path under `-derivedDataPath` is asserted from the documented layout, not observed. If `install` cannot find the `.app`, print the real path with `xcodebuild -showBuildSettings`. The app is expected to launch to its form; the photo prompt will not appear on the Simulator (TN3179).*

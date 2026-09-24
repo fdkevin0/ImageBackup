@@ -1,10 +1,13 @@
 version: 1
 
-# Keep in sync with the Xcode project's PRODUCT_BUNDLE_IDENTIFIER
-# (`devplaceholder.$(PROJECT_UNIQUE_VALUE:identifier).$(PRODUCT_NAME:rfc1034identifier)`), or the two
-# builds install as separate apps instead of replacing each other.
-bundleID: devplaceholder.uesrts8d.ImageBackup
+# Keep in sync with the Xcode project's PRODUCT_BUNDLE_IDENTIFIER.
+bundleID: com.fdkevin.imagebackup
 
-# Merged over the plist xtool generates. It must NOT contain $(BUILD_SETTING) placeholders — xtool
-# does not expand them, and a literal "$(PRODUCT_BUNDLE_IDENTIFIER)" would overwrite the real one.
+# xtool does not expand Xcode build-setting placeholders in this file.
 infoPath: ImageBackup-Info.plist
+
+resources:
+  - app/PrivacyInfo.xcprivacy
+
+# Replace this 1024x1024 placeholder with final art at the same path.
+iconPath: Artwork/AppIcon.png

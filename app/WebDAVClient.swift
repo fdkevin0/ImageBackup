@@ -1,23 +1,9 @@
 import Foundation
 import Security
 
-enum WebDAVError: LocalizedError {
-    case notHTTP
-    case status(Int, String)
-    case badURL(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .notHTTP: "Server did not return HTTP."
-        case .status(let code, let path): "HTTP \(code) for \(path)"
-        case .badURL(let s): "Bad URL: \(s)"
-        }
-    }
-}
-
-enum PutResult { case uploaded, alreadyThere }
-
 /// Minimal WebDAV: MKCOL, HEAD, PUT. No dependency — URLRequest.httpMethod is a free-form String.
+///
+/// The error/result types live in `WebDAVTypes.swift` so they can be compiled without `Security`.
 ///
 /// ponytail: one client per backup run; `createdDirs` is in-memory only, so a relaunch re-MKCOLs
 /// every folder it touches. That's one extra round trip per folder per run — worth a persistent
@@ -36,6 +22,11 @@ actor WebDAVClient {
         let cfg = URLSessionConfiguration.default
         cfg.waitsForConnectivity = true
         cfg.timeoutIntervalForRequest = 120
+        // A request timeout with no resource ceiling can still wait forever: with
+        // `waitsForConnectivity` set, a request made off the network parks rather than fails. An
+        // hour covers a multi-GB video over a LAN, and bounds the rest into an error the user sees
+        // instead of a spinner that never stops.
+        cfg.timeoutIntervalForResource = 3600
         self.session = URLSession(configuration: cfg)
     }
 
@@ -77,21 +68,21 @@ actor WebDAVClient {
         }
     }
 
-    /// Bytes already stored at `path`, or nil if nothing is there.
+    /// What is already stored at `path`.
     ///
     /// This is a HEAD rather than a conditional PUT because `If-None-Match: *` is **not**
     /// dependable: rclone's WebDAV ignores it and silently overwrites (verified against
     /// rclone v1.75.1, 2026-09-24 — same path, same header, 201 instead of 412). A HEAD that
     /// returns 412 on one server and 201 on another is not something a backup can rest on.
     /// One extra round trip per file, correct everywhere.
-    func existingSize(path: String) async throws -> Int64? {
+    func existing(path: String) async throws -> RemoteFile {
         let http = try await send(makeRequest("HEAD", path: path))
         switch http.statusCode {
         case 404:
-            return nil
+            return .absent
         case 200, 204:
-            // -1 when the server omits Content-Length; callers must treat that as "unknown".
-            return http.expectedContentLength
+            let length = http.expectedContentLength
+            return length >= 0 ? .sized(length) : .unsized
         case let code:
             throw WebDAVError.status(code, path)
         }
@@ -99,14 +90,17 @@ actor WebDAVClient {
 
     /// Still sends `If-None-Match: *` as a second line of defence for servers that honour it.
     /// Where it's ignored this behaves as a plain PUT — which is why the caller HEADs first.
-    func put(fileURL: URL, path: String) async throws -> PutResult {
+    ///
+    /// Returns false when the server refused because something is already there: for the caller that
+    /// case needs no more handling than a successful upload.
+    func put(fileURL: URL, path: String) async throws -> Bool {
         var r = makeRequest("PUT", path: path)
         r.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         r.setValue("*", forHTTPHeaderField: "If-None-Match")
 
         switch try await send(r, fromFile: fileURL).statusCode {
-        case 200, 201, 204: return .uploaded
-        case 412:           return .alreadyThere
+        case 200, 201, 204: return true
+        case 412:           return false
         case let code:      throw WebDAVError.status(code, path)
         }
     }
@@ -114,7 +108,10 @@ actor WebDAVClient {
 
 /// The NAS credential is the one real secret here, so it goes in the Keychain, not UserDefaults.
 enum Keychain {
-    private static let service = "com.example.imagebackup"
+    /// Follows the app's own identifier rather than the hand-copied `com.example.imagebackup` that
+    /// used to sit here — one fewer place to update when the bundle id moves. The consequence of
+    /// the change today: a password saved by an older build is not found, and is typed in once more.
+    private static let service = Bundle.main.bundleIdentifier ?? "com.fdkevin.imagebackup"
 
     private static func query(_ account: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,

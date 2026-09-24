@@ -13,3 +13,7 @@ Package.resolved
 
 # macOS
 .DS_Store
+
+# Repository-local agent skills
+.agents/skills/
+.claude/skills/

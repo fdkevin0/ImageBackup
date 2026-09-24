@@ -1,16 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- The xtool build's plist, merged over the one xtool generates (xtool.yml → infoPath).
-     Token-free on purpose: xtool does not expand $(BUILD_SETTING), unlike Xcode.
-
-     Only the keys xtool cannot know live here. The Xcode build reads app/Info.plist instead, which
-     is the same three keys plus everything Xcode would otherwise generate — so when you change an
-     ATS rule or a usage string, change it in BOTH files.
-
-     Deliberately not set: UISupportedInterfaceOrientations. xtool defaults to portrait-only on
-     iPhone where the Xcode build allows landscape; cosmetic for a form, and not worth a third copy. -->
+<!-- xtool does not expand Xcode build settings. Keep usage, ATS, and version values in sync with
+     app/Info.plist and the Xcode project. -->
 <plist version="1.0">
 <dict>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Backs up your photos to your own NAS.</string>
 	<key>NSLocalNetworkUsageDescription</key>

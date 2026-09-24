@@ -9,9 +9,23 @@ struct BackupConfig {
     var deviceName: String
 }
 
+extension BackupConfig {
+    static func configured() -> BackupConfig {
+        let defaults = UserDefaults.standard
+        return BackupConfig(
+            serverURL: defaults.string(forKey: "serverURL") ?? "",
+            username: defaults.string(forKey: "username") ?? "",
+            password: Keychain.load("webdavPassword"),
+            deviceName: defaults.string(forKey: "deviceName") ?? "")
+    }
+}
+
 enum BackupError: LocalizedError {
     case noPhotoAccess
     case badServerURL(String)
+    /// The run stopped rather than retry every remaining file against a server that is not
+    /// answering. Carries the last real error, so the user sees the cause and not just a count.
+    case givingUp(afterFiles: Int, message: String)
 
     var errorDescription: String? {
         switch self {
@@ -19,6 +33,13 @@ enum BackupError: LocalizedError {
             "Photo library access denied. Settings → Privacy → Photos → ImageBackup."
         case .badServerURL(let s):
             "Not a usable server URL: \(s)"
+        case .givingUp(let files, let message):
+            """
+            Stopped: \(files) files in a row failed. Check the NAS address, and that this phone is \
+            on its network.
+
+            Last error: \(message)
+            """
         }
     }
 }
@@ -31,9 +52,7 @@ enum BackupError: LocalizedError {
 @MainActor
 @Observable
 final class BackupEngine {
-    /// Every stored property below has a default, so construction needs no isolation. Without
-    /// this, `@State private var engine = BackupEngine()` in a View is a call to a MainActor
-    /// initializer from a nonisolated property initializer — a Swift 6 error, not a warning.
+    // A @State property initializer cannot call a MainActor initializer under Swift 6.
     nonisolated init() {}
 
     enum Phase: Equatable {
@@ -44,16 +63,41 @@ final class BackupEngine {
     private(set) var phase: Phase = .idle
     private(set) var assetsDone = 0
     private(set) var assetsTotal = 0
-    private(set) var uploadedBytes: Int64 = 0
+    private(set) var uploadedFiles = 0
     private(set) var currentFile = ""
-    private(set) var activity: [String] = []
+    private(set) var skippedCollisions = 0
+    private(set) var unverifiedFiles = 0
+    private(set) var failures: [String] = []
+    private(set) var hasLimitedAccess = false
+    private(set) var state = BackupState()
 
     private var task: Task<Void, Never>?
 
-    func start(config: BackupConfig, from: Date, to: Date) {
+    func loadState() {
+        state = BackupState.load()
+    }
+
+    enum Window {
+        case sinceLastRun
+        case everything
+    }
+
+    func start(config: BackupConfig, window: Window) {
         guard task == nil else { return }
+        loadState()
+
+        // The engine takes an exclusive end, hence the extra day: "today" has to include today.
+        let end = Date.now.addingTimeInterval(86_400)
+        let start: Date = switch window {
+        case .everything:
+            .distantPast
+        case .sinceLastRun:
+            (state.lastRunEnd ?? Date.now.addingTimeInterval(-30 * 86_400))
+                .addingTimeInterval(-7 * 86_400)
+        }
+
         task = Task { [weak self] in
-            await self?.run(config: config, from: from, to: to)
+            await self?.run(config: config, from: start, to: end)
             self?.task = nil
         }
     }
@@ -66,8 +110,11 @@ final class BackupEngine {
         phase = .running
         assetsDone = 0
         assetsTotal = 0
-        uploadedBytes = 0
-        activity = []
+        uploadedFiles = 0
+        skippedCollisions = 0
+        unverifiedFiles = 0
+        failures = []
+        Self.resetStaging()
 
         do {
             guard let base = URL(string: config.serverURL),
@@ -79,18 +126,37 @@ final class BackupEngine {
 
             let assets = try await fetchAssets(from: from, to: to)
             assetsTotal = assets.count
-            guard !assets.isEmpty else { phase = .done; return }
 
             let client = WebDAVClient(base: base,
                                       username: config.username,
                                       password: config.password)
+            var consecutiveFailures = 0
 
             for asset in assets {
                 try Task.checkCancellation()
                 for resource in Self.resourcesToBackUp(asset) {
                     try Task.checkCancellation()
-                    currentFile = resource.filename ?? "(unnamed)"
-                    try await upload(resource, of: asset, device: config.deviceName, client: client)
+                    let path = Self.remotePath(for: asset,
+                                               resource: resource,
+                                               device: config.deviceName)
+                    currentFile = Self.filename(of: resource)
+                    do {
+                        try await upload(resource, path: path, client: client)
+                        consecutiveFailures = 0
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        failures.append(path)
+                        consecutiveFailures += 1
+                        // ponytail: three in a row is a guess at "this is not a blip". Without
+                        // it an unreachable NAS costs files × attempts × backoff before the app
+                        // says so, which on a 30-day window is the difference between a message
+                        // and an hour of nothing.
+                        if consecutiveFailures >= 3 {
+                            throw BackupError.givingUp(afterFiles: consecutiveFailures,
+                                                       message: error.localizedDescription)
+                        }
+                    }
                 }
                 assetsDone += 1
             }
@@ -101,6 +167,17 @@ final class BackupEngine {
             phase = .failed(error.localizedDescription)
         }
         currentFile = ""
+        recordOutcome(walkedTo: to)
+    }
+
+    private func recordOutcome(walkedTo end: Date) {
+        state.lastRun = BackupState.Run(uploaded: uploadedFiles,
+                                        skipped: skippedCollisions,
+                                        failed: failures.count)
+        if case .done = phase, failures.isEmpty {
+            state.lastRunEnd = end
+        }
+        state.save()
     }
 
     private func fetchAssets(from: Date, to: Date) async throws -> [PHAsset] {
@@ -108,13 +185,15 @@ final class BackupEngine {
         guard status == .authorized || status == .limited else {
             throw BackupError.noPhotoAccess
         }
+        // `.limited` means the walk sees only the photos the user picked. The run will look
+        // complete and be incomplete, so the UI has to say so.
+        hasLimitedAccess = status == .limited
 
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "creationDate >= %@ AND creationDate < %@",
                                         from as NSDate, to as NSDate)
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
-        // Without this PhotoKit lazily fetches PHAssetExtendedMetadata per asset, and logs it whenever
-        // the reader is on the main queue — which, being @MainActor, this engine always is.
+        // Prefetch the extended-metadata group instead of letting PhotoKit fetch it per asset.
         options.prefetchAssetExtendedMetadata = true
 
         let result = PHAsset.fetchAssets(with: options)
@@ -125,43 +204,67 @@ final class BackupEngine {
     }
 
     private func upload(_ resource: PHAssetResource,
-                        of asset: PHAsset,
-                        device: String,
+                        path: String,
                         client: WebDAVClient) async throws {
-        let path = Self.remotePath(for: asset, resource: resource, device: device)
+        var attempt = 1
+        while true {
+            do {
+                try await uploadOnce(resource, path: path, client: client)
+                return
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                guard attempt < RetryPolicy.maxAttempts, RetryPolicy.isTransient(error) else {
+                    throw error
+                }
+                try await Task.sleep(for: RetryPolicy.delay(afterAttempt: attempt))
+                attempt += 1
+            }
+        }
+    }
+
+    private func uploadOnce(_ resource: PHAssetResource,
+                            path: String,
+                            client: WebDAVClient) async throws {
         try await client.ensureDirectory(Self.parentDirectory(of: path))
 
         // dataSize is iOS 27+ and Int? — nil means unknown, not zero.
         let expected = resource.dataSize.map { Int64($0) }
 
-        if let stored = try await client.existingSize(path: path) {
+        switch try await client.existing(path: path) {
+        case .absent:
+            break
+
+        case .sized(let stored):
             // Never overwrite. A size mismatch means a different asset already owns this name,
             // which is a real collision and must be surfaced, not silently resolved either way.
-            // ponytail: skip + log for the MVP. Add deterministic renaming once you've seen how
-            // often this actually fires on your library.
-            if let expected, expected > 0, stored > 0, stored != expected {
-                note("! \(path) — stored \(stored)B vs \(expected)B: name collision, skipped")
-            } else {
-                note("= \(path) (already there)")
+            // ponytail: skip + count for the MVP. Add deterministic renaming once the count says
+            // it is worth building.
+            if let expected, expected > 0, stored != expected {
+                skippedCollisions += 1
             }
+            return
+
+        case .unsized:
+            // Something is there but the server would not say how big — a HEAD with no
+            // Content-Length. It cannot be compared, so it is left alone and *counted*, rather than
+            // assumed complete: an unverifiable file that reports as done is the quiet kind of hole.
+            unverifiedFiles += 1
             return
         }
 
         let temp = try await download(resource)
         defer { try? FileManager.default.removeItem(at: temp) }
 
-        switch try await client.put(fileURL: temp, path: path) {
-        case .uploaded:
-            if let expected { uploadedBytes += expected }
-            note("↑ \(path)")
-        case .alreadyThere:
-            note("= \(path) (raced, already there)")
+        // false means someone else won the race between the HEAD and the PUT; nothing to do.
+        if try await client.put(fileURL: temp, path: path) {
+            uploadedFiles += 1
         }
     }
 
-    /// Streams to /tmp, never into memory — a 4K video as `Data` gets the app killed (research §4.2).
+    /// Streams to disk, never into memory — a 4K video as `Data` gets the app killed (research §4.2).
     private func download(_ resource: PHAssetResource) async throws -> URL {
-        let destination = FileManager.default.temporaryDirectory
+        let destination = Self.stagingDirectory
             .appending(path: "\(UUID().uuidString)-\(Self.filename(of: resource))")
 
         let options = PHAssetResourceRequestOptions()
@@ -173,11 +276,23 @@ final class BackupEngine {
         return destination
     }
 
+    // Clear files left behind when a prior run was killed before its defer executed.
+    private static var stagingDirectory: URL {
+        FileManager.default.temporaryDirectory.appending(path: "imagebackup")
+    }
+
+    private static func resetStaging() {
+        try? FileManager.default.removeItem(at: stagingDirectory)
+        try? FileManager.default.createDirectory(at: stagingDirectory,
+                                                 withIntermediateDirectories: true)
+    }
+
     // MARK: - Layout rules (research §6)
 
-    /// Originals + Live Photo motion. Skips `fullSize*` renders (derivable) and `adjustment*`
-    /// data — see research §6.5 for why that's the policy rather than a shortcut.
-    private static let wantedTypes: Set<PHAssetResourceType> = [.photo, .video, .pairedVideo, .audio]
+    // fullSize renders are derivable; adjustmentBase variants may duplicate the original.
+    private static let wantedTypes: Set<PHAssetResourceType> = [
+        .photo, .video, .pairedVideo, .audio, .adjustmentData,
+    ]
 
     private static func resourcesToBackUp(_ asset: PHAsset) -> [PHAssetResource] {
         PHAssetResource.assetResources(for: asset).filter { wantedTypes.contains($0.type) }
@@ -193,10 +308,10 @@ final class BackupEngine {
         // moves a 23:30 shot into the wrong month (research §6.3).
         calendar.timeZone = .current
         let parts = calendar.dateComponents([.year, .month], from: asset.creationDate ?? Date())
-
         let year = String(format: "%04d", parts.year ?? 0)
         let month = String(format: "%02d", parts.month ?? 0)
-        return "\(sanitize(device))/\(year)/\(month)/\(filename(of: resource))"
+        let deviceDirectory = device.isEmpty ? "" : "\(sanitize(device))/"
+        return "\(deviceDirectory)\(year)/\(month)/\(filename(of: resource))"
     }
 
     private static func parentDirectory(of path: String) -> String {
@@ -219,8 +334,4 @@ final class BackupEngine {
         return cleaned.isEmpty || cleaned == "." || cleaned == ".." ? UUID().uuidString : cleaned
     }
 
-    private func note(_ line: String) {
-        activity.append(line)
-        if activity.count > 200 { activity.removeFirst(activity.count - 200) }
-    }
 }
