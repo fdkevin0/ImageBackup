@@ -8,13 +8,14 @@ Research first, then prove the transport. Start with whichever line below matche
 | | |
 |---|---|
 | **Why this design, and what it can't do** | [`docs/photo-to-nas.md`](docs/photo-to-nas.md) — the Apple SDK survey, the storage layout, and the recommendation. §11 lists what is still unverified. |
-| **Building it from Linux** | [`docs/ios-dev-on-linux.md`](docs/ios-dev-on-linux.md) — toolchains, VMs, cloud Macs. Its §9 records the ExtensionKit blocker for the PhotoKit path. |
-| **Running something now** | [`app/README.md`](app/README.md) — the foreground WebDAV MVP: three Swift files, no dependencies, plus a script that checks your NAS before you build. |
+| **Choosing a Linux setup** | [`docs/ios-dev-on-linux.md`](docs/ios-dev-on-linux.md) — toolchains, VMs, cloud Macs, and why. Its §9 records the ExtensionKit blocker for the PhotoKit path. |
+| **Operating this machine's setup** | [`docs/ios-toolchain-linux.md`](docs/ios-toolchain-linux.md) — what is installed here, daily commands, the swiftly GPG workaround, upkeep. |
+| **Running the app** | [`app/README.md`](app/README.md) — the foreground WebDAV MVP. Open `ImageBackup.xcodeproj` on a Mac, or `xtool dev build` here. |
 
 ## State
 
-- The **MVP works in the foreground**: date range → photo library → WebDAV `PUT`, with the
-  collision and folder-creation rules from the research already implemented.
+- The **MVP is written, compiles, and packages** — `xtool dev build` on Linux produces an arm64
+  `.app` (and an unsigned `.ipa` with `--ipa`). **It has not run against a NAS or on a device yet.**
 - The **background path is unbuilt**. It needs an app extension, a paid team, and a physical
   device — and one experiment before anything else: whether the system's uploader can be aimed at
   an arbitrary user-supplied NAS hostname (`BackgroundUploadURLBase` validation,

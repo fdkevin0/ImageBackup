@@ -89,7 +89,7 @@ final class BackupEngine {
                 try Task.checkCancellation()
                 for resource in Self.resourcesToBackUp(asset) {
                     try Task.checkCancellation()
-                    currentFile = resource.originalFilename
+                    currentFile = resource.filename ?? "(unnamed)"
                     try await upload(resource, of: asset, device: config.deviceName, client: client)
                 }
                 assetsDone += 1
@@ -159,7 +159,7 @@ final class BackupEngine {
     /// Streams to /tmp, never into memory — a 4K video as `Data` gets the app killed (research §4.2).
     private func download(_ resource: PHAssetResource) async throws -> URL {
         let destination = FileManager.default.temporaryDirectory
-            .appending(path: "\(UUID().uuidString)-\(Self.sanitize(resource.originalFilename))")
+            .appending(path: "\(UUID().uuidString)-\(Self.filename(of: resource))")
 
         let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = true   // required, or iCloud-only assets fail outright
@@ -193,14 +193,20 @@ final class BackupEngine {
 
         let year = String(format: "%04d", parts.year ?? 0)
         let month = String(format: "%02d", parts.month ?? 0)
-        return "\(sanitize(device))/\(year)/\(month)/\(sanitize(resource.originalFilename))"
+        return "\(sanitize(device))/\(year)/\(month)/\(filename(of: resource))"
     }
 
     private static func parentDirectory(of path: String) -> String {
         (path as NSString).deletingLastPathComponent
     }
 
-    /// `originalFilename` is not filesystem-safe: "/" would invent a path level and ":" is illegal on SMB.
+    /// `originalFilename` is deprecated in iOS 27 and its replacement `filename` is nullable, so a
+    /// resource with no name gets a UUID from `sanitize` — an odd filename beats a dropped photo.
+    private static func filename(of resource: PHAssetResource) -> String {
+        sanitize(resource.filename ?? "")
+    }
+
+    /// Not filesystem-safe as-is: "/" would invent a path level and ":" is illegal on SMB.
     private static func sanitize(_ name: String) -> String {
         let cleaned = name
             .replacingOccurrences(of: "/", with: "_")

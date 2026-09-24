@@ -531,6 +531,11 @@ Design implication: onboarding must include a foreground "connect to your NAS" s
 
 From [NSAllowsLocalNetworking](https://developer.apple.com/documentation/bundleresources/information-property-list/nsapptransportsecurity/nsallowslocalnetworking): since iOS 17, ATS **no longer allows connections to IP addresses by default** — you must add specific IPs or CIDR ranges to `NSExceptionDomains`. `.local` and unqualified domains are allowed by default on modern OSes. A user pointing the app at `http://192.168.1.10:5005` will therefore need an ATS exception, and HTTPS with a self-signed cert on a NAS is a further trust problem to solve.
 
+- **The key's abstract overstates it.** "Controls whether ATS allows… IP addresses" reads as though `NSAllowsLocalNetworking` alone admits an IP literal; the iOS 17 note says the remedy is `NSExceptionDomains`. A [developer forum thread](https://developer.apple.com/forums/thread/747421) has a reporter failing with *both* the key and a `192.168.0.0/24` entry set, and one entry cannot cover all IP addresses. Set both; treat the CIDR route as unverified (§11.16).
+- **A runtime address needs a compile-time exception, so it must be a range.** The user types the NAS address, so no single IP can be listed at build time — hence the private ranges (`10/8`, `172.16/12`, `192.168/16`). `NSAllowsArbitraryLoads` does **not** widen it: on iOS 17+ the local-networking key tells newer OSes to *ignore* the arbitrary-loads key.
+
+Entering the NAS by hostname (`nas.local`) avoids the question — see `app/README.md`.
+
 ### 8.3 App Review
 
 - **2.5.4** — "Multitasking apps may only use background services for their intended purposes: VoIP, audio playback, location, task completion, local notifications, etc." Using Apple's own background-upload extension point for exactly its documented purpose is the *safest possible* position under this rule.
@@ -560,7 +565,7 @@ xtool's extension support targets **classic Foundation app extensions** (`NSExte
 
 **Therefore:**
 
-- On a pure-Linux xtool workflow, the §1 architecture is **not buildable today**. The §2 fallback (host-app-only, background `URLSession`) is.
+- On a pure-Linux xtool workflow, the §1 architecture is **not buildable today**. The §2 fallback (host-app-only, background `URLSession`) is — verified 2026-09-24: that MVP compiles and links into an arm64 `.app` with `xtool dev build` ([`ios-toolchain-linux.md`](./ios-toolchain-linux.md)).
 - A plausible unverified workaround: build the extension as a normal target and post-process the `.app` to move the `.appex` from `PlugIns/` to `Extensions/`, with `EXAppExtensionAttributes` in its Info.plist. That is a guess, not a supported path, and it is the first thing to prototype if pure-Linux is a hard requirement.
 - §2 needs no extension at all, so if pure-Linux matters more than elegance, §2 is the lower-risk choice despite being more code.
 
@@ -606,12 +611,13 @@ Step 1 is cheaper than it sounds because the transport is no longer a question. 
 13. **The Synology File Station API guide is dated 2023** (the copy retrieved carried a 2023 Synology copyright). Endpoint shapes may have moved; check against current DSM.
 14. **QNAP/TrueNAS WebDAV specifics** rest on vendor-adjacent and secondary pages, not on QNAP/iXsystems documentation read directly.
 15. **Immich's rejection of `PHAssetResourceUploadJob`** is inferred from the absence of a background-upload extension in its iOS tree; I did not read a maintainer statement.
+16. **Whether `NSExceptionDomains` CIDR entries actually admit a private-range IP on iOS 17+.** Documented as supported, and the mechanism §8.2 recommends, but the single practitioner report found had both ATS keys set and still failed. Test `http://192.168.x.x` on a device before trusting it; a hostname sidesteps the question entirely. An ATS block surfaces as -1200, not as §8.1's local-network denial.
 
 ### PhotoSync claims
 
-16. **PhotoSync may have an undocumented statistics screen.** §7.4's rate finding is a documentation negative, not a proof of absence.
-17. **Whether PhotoSync uses any PhotoKit background API.** Its background model is described only in support terms (charging, app switcher). §7.4's "weaker by construction" is inference from its age and its described constraints.
-18. **PhotoSync's iCloud-offload behaviour** is inferred, not documented — I did not find a support article describing how it handles `Optimize Storage` originals.
+17. **PhotoSync may have an undocumented statistics screen.** §7.4's rate finding is a documentation negative, not a proof of absence.
+18. **Whether PhotoSync uses any PhotoKit background API.** Its background model is described only in support terms (charging, app switcher). §7.4's "weaker by construction" is inference from its age and its described constraints.
+19. **PhotoSync's iCloud-offload behaviour** is inferred, not documented — I did not find a support article describing how it handles `Optimize Storage` originals.
 
 ---
 

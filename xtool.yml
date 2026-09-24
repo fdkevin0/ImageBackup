@@ -1,0 +1,10 @@
+version: 1
+
+# Keep in sync with the Xcode project's PRODUCT_BUNDLE_IDENTIFIER
+# (`devplaceholder.$(PROJECT_UNIQUE_VALUE:identifier).$(PRODUCT_NAME:rfc1034identifier)`), or the two
+# builds install as separate apps instead of replacing each other.
+bundleID: devplaceholder.uesrts8d.ImageBackup
+
+# Merged over the plist xtool generates. It must NOT contain $(BUILD_SETTING) placeholders — xtool
+# does not expand them, and a literal "$(PRODUCT_BUNDLE_IDENTIFIER)" would overwrite the real one.
+infoPath: ImageBackup-Info.plist

@@ -3,7 +3,7 @@
 **Scope:** how to build/ship iOS apps from an Ubuntu-family x86_64 Linux box, and whether local macOS VMs are a mature option.
 **All sources last verified:** 2026-09-24 (unless a version/date is stated inline).
 **Method:** primary sources preferred (GitHub APIs for repo/release dates, vendor docs/pricing pages, Apple developer news). Where only secondary sources exist, that is flagged explicitly.
-**Companion doc:** [`photo-to-nas.md`](./photo-to-nas.md) — the app this toolchain question was raised to build. Its §9 is where this doc's ExtensionKit finding becomes a blocker.
+**Companion docs:** [`photo-to-nas.md`](./photo-to-nas.md) — the app this toolchain question was raised to build; its §9 is where this doc's ExtensionKit finding becomes a blocker. [`ios-toolchain-linux.md`](./ios-toolchain-linux.md) — the operational counterpart, for the machine where the stack is already installed: stop reading this survey and go there.
 
 ---
 
@@ -11,7 +11,7 @@
 
 1. **2026 changed the local-VM answer decisively.** macOS 26 "Tahoe" is the **final macOS release for Intel Macs**; macOS 27 "Golden Gate" (released **2026-09-14**) is **Apple silicon only** ([Apple Developer News, 2026-09-09](https://developer.apple.com/news/?id=k1mtkt1k)). Xcode 27 is reported **Apple-silicon-only** ([byteiota](https://byteiota.com/xcode-27-is-out-apple-silicon-only-swift-6-4-agents/), [blakecrosley](https://blakecrosley.com/zh-Hant/blog/xcode-27-release), [DevelopersIO release-notes summary](https://dev.classmethod.jp/articles/xcode-27-ios-27-beta-release-notes/)) — note Apple's own [system-requirements page](https://developer.apple.com/xcode/system-requirements/) does not list a hardware row, so this is **high-confidence-but-secondary** (see §9).
 2. **Therefore "hackintosh-in-a-VM" on an x86_64 Linux host is now a dead end for new work.** It can never run Xcode 27, and the practical ceiling is macOS 26 Tahoe + Xcode 26.x. Combined with the **April 2027 App Store SDK floor** (iOS 27 SDK → Xcode 27), Intel-on-KVM has an **expiry date of roughly April 2027** for App Store uploads.
-3. **The genuinely interesting 2026 development is `xtool`**, which builds and signs real iOS apps from **Linux x86_64** using the Swift 6.4 toolchain plus a Darwin Swift SDK that *you extract from `Xcode.xip` yourself*. Latest release **1.20.1 (2026-09-21)** explicitly supports **Xcode 27** and Swift 6.4 ([GitHub API](https://github.com/xtool-org/xtool/releases)). It is the only path that plausibly satisfies the April 2027 SDK rule with no Mac anywhere.
+3. **The genuinely interesting 2026 development is `xtool`**, which builds and signs real iOS apps from **Linux x86_64** using the Swift 6.4 toolchain plus a Darwin Swift SDK that *you extract from `Xcode.xip` yourself*. Latest release **1.20.1 (2026-09-21)** explicitly supports **Xcode 27** and Swift 6.4 ([GitHub API](https://github.com/xtool-org/xtool/releases)). It is the only path that plausibly satisfies the April 2027 SDK rule with no Mac anywhere. No longer theoretical: the companion app was built into a real arm64 `.app` this way on 2026-09-24 ([`ios-toolchain-linux.md`](./ios-toolchain-linux.md)).
 4. **The reliable, boring answer remains rented Apple hardware.** Scaleway Mac mini M1 at **€75/mo / €0.11/hr** ([pricing](https://www.scaleway.com/en/pricing/apple-silicon/)) and MacStadium M2.S at **$109/mo** ([pricing](https://www.macstadium.com/pricing)) are the cheapest compliant persistent GUI boxes; AWS EC2 Mac is **$1.23/hr for `mac-m4.metal`** with a mandatory **24-hour** minimum ([AWS docs](https://docs.aws.amazon.com/en_jp/AWSEC2/latest/UserGuide/ec2-mac-instances.md), secondary price source [bigbell.ai](https://bigbell.ai/coin/aws/ec2/mac-m4.metal)).
 5. **For cross-platform frameworks, the "develop on Linux, rent only the final build" split is real and mature.** Expo **EAS Build** (free tier: 15 iOS builds/mo; $2/build medium worker) + **EAS Submit** (free, accepts any valid `.ipa`, not just EAS-built ones) removes the Mac from a solo dev's loop ([expo.dev/pricing](https://expo.dev/pricing), [docs.expo.dev/submit](https://docs.expo.dev/deploy/submit-to-app-stores.md)).
 6. **Uploading from Linux is officially supported now.** Apple's `iTMSTransporter` ships Linux builds, and the App Store Connect API added a **build-upload REST flow** (`POST /v1/buildUploads` + `buildUploadFiles`) at WWDC 2025 ([Apple docs](https://developer.apple.com/documentation/appstoreconnectapi/build-uploads)). `altool` needs macOS; `notarytool` is irrelevant to App Store uploads.
@@ -184,6 +184,8 @@ Repo: [xtool-org/xtool](https://github.com/xtool-org/xtool) (formerly `kabirober
 - You still must supply `Xcode.xip` and comply with Apple's license — so xtool is "no Mac", not "no Apple".
 
 **Why this matters in 2026:** xtool consumes the **SDK** from Xcode 27 without needing to *run* Xcode 27. Since the April 2027 App Store rule is an **SDK** floor, xtool is the only Mac-free path that could still be compliant after April 2027 — contingent on Apple's upload-time validation accepting it (unverified; see §9).
+
+**Running it:** this section is the *decision*; the *manual* — install, daily commands, maintenance, troubleshooting — is [`ios-toolchain-linux.md`](./ios-toolchain-linux.md).
 
 ### 3.2 Swift SDKs / cross-compilation from Linux
 

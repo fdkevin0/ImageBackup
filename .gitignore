@@ -8,6 +8,8 @@ xcuserdata/
 # SwiftPM / xtool
 .build/
 Package.resolved
+/xtool
+.bsp/
 
 # macOS
 .DS_Store
