@@ -113,6 +113,9 @@ final class BackupEngine {
         options.predicate = NSPredicate(format: "creationDate >= %@ AND creationDate < %@",
                                         from as NSDate, to as NSDate)
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
+        // Without this PhotoKit lazily fetches PHAssetExtendedMetadata per asset, and logs it whenever
+        // the reader is on the main queue — which, being @MainActor, this engine always is.
+        options.prefetchAssetExtendedMetadata = true
 
         let result = PHAsset.fetchAssets(with: options)
         var assets: [PHAsset] = []
